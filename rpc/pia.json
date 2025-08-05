@@ -1,0 +1,16 @@
+{
+  "name": "Private Internet Access",
+  "details": "Real IP: 69.139.123.139",
+  "state": "VPN IP: 102.129.145.106",
+  "type": 0,
+  "timestamps": {
+    "start": "now"
+  },
+  "assets": {
+    "large_image": "https://cdn.discordapp.com/attachments/1141882822240522301/1402162988009394277/512x512bb.jpg?ex=6892e98b&is=6891980b&hm=31ad41157072d7c4dcb2ea7e55d64b4ee22f51ae4bad85aca83fdb9cae1e11c8&",
+    "large_text": "",
+    "small_image": "",
+    "small_text": ""
+  },
+  "buttons": []
+}
