@@ -2,36 +2,45 @@ const Discord = require('discord.js-selfbot-v13')
 const axios = require('axios')
 const fs = require('fs')
 const path = require('path')
+const util = require('util');
 
-const CONFIG_PATH = path.join(__dirname, 'config.json')
-const CACHE_PATH = path.join(__dirname, 'sessionCache.json')
+const configPath = path.join(__dirname, 'config.json')
+const cachePath = path.join(__dirname, 'sessionCache.json')
 
-sessionCache = JSON.parse(fs.readFileSync(CACHE_PATH, 'utf8'))
+sessionCache = JSON.parse(fs.readFileSync(cachePath, 'utf8'))
 
 function addSessionToCache(sessionId) {
-  const oneDayMs = 24 * 60 * 60 * 1000
-  if (Date.now() - sessionCache.lastUpdated > oneDayMs) {
-    sessionCache = { lastUpdated: Date.now(), sessionIds: [] }
-  }
+    const oneDayMs = 24 * 60 * 60 * 1000
+    if (Date.now() - sessionCache.lastUpdated > oneDayMs) {
+        sessionCache = {
+            lastUpdated: Date.now(),
+            sessionIds: []
+        }
+    }
 
-  if (!sessionCache.sessionIds.includes(sessionId)) {
-    sessionCache.sessionIds.push(sessionId)
-    sessionCache.lastUpdated = Date.now()
-    fs.writeFileSync(CACHE_PATH, JSON.stringify(sessionCache, null, 2), 'utf8')
-  }
+    if (!sessionCache.sessionIds.includes(sessionId)) {
+        sessionCache.sessionIds.push(sessionId)
+        sessionCache.lastUpdated = Date.now()
+        fs.writeFileSync(cachePath, JSON.stringify(sessionCache, null, 2), 'utf8')
+    }
 }
 
 let config = {}
-if (fs.existsSync(CONFIG_PATH)) {
+if (fs.existsSync(configPath)) {
     try {
-        config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))
+        config = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+
+        if (!config.applicationId) {
+            console.log('applicationId is missing in config')
+            process.exit(1)
+        }
     } catch (err) {
-        console.error(err)
+        console.log(err)
     }
 }
 
 function saveConfig() {
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8')
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8')
 }
 
 const prefix = config.prefix
@@ -47,7 +56,7 @@ function createCommand(name, callback) {
 
 client.on('ready', () => {
     console.log(`${client.user.username} is ready`)
-    
+
     addSessionToCache(client.sessionId)
 
     rpcEnabled = config.rpcEnabled
@@ -78,34 +87,37 @@ client.on('messageCreate', async message => {
 
     if (commands.has(command)) {
         try {
-            await message.delete()
+            message.delete()
             await commands.get(command)(message, args)
-        } catch (err) {console.error(err)}
+            console.log(`ran command: ${command}`)
+        } catch (err) {
+            console.log(err)
+        }
     }
 })
 
-const RPC_DIR = path.join(__dirname, 'rpc')
+const rpcDir = path.join(__dirname, 'rpc')
 let activeRPC = null
 let rpcEnabled = config.rpcEnabled
 let isCurrentlyOffline = false
 
-if (!fs.existsSync(RPC_DIR)) {
-    fs.mkdirSync(RPC_DIR, {
+if (!fs.existsSync(rpcDir)) {
+    fs.mkdirSync(rpcDir, {
         recursive: true
     })
 }
 
 function getPresetList() {
-    return fs.readdirSync(RPC_DIR)
+    return fs.readdirSync(rpcDir)
         .filter(file => file.endsWith('.json'))
         .map(file => ({
             name: path.basename(file, '.json'),
-            path: path.join(RPC_DIR, file)
+            path: path.join(rpcDir, file)
         }))
 }
 
 function loadPreset(name) {
-    const presetPath = path.join(RPC_DIR, `${name}.json`)
+    const presetPath = path.join(rpcDir, `${name}.json`)
     if (!fs.existsSync(presetPath)) return null
 
     try {
@@ -117,12 +129,12 @@ function loadPreset(name) {
 }
 
 function savePreset(name, data) {
-    const presetPath = path.join(RPC_DIR, `${name}.json`)
+    const presetPath = path.join(rpcDir, `${name}.json`)
     fs.writeFileSync(presetPath, JSON.stringify(data, null, 2), 'utf8')
 }
 
 function deletePreset(name) {
-    const presetPath = path.join(RPC_DIR, `${name}.json`)
+    const presetPath = path.join(rpcDir, `${name}.json`)
     if (fs.existsSync(presetPath)) {
         fs.unlinkSync(presetPath)
         return true
@@ -130,6 +142,7 @@ function deletePreset(name) {
     return false
 }
 
+// bro this is so annoying
 async function setRPC(preset) {
     if (!preset) {
         await client.user.setActivity(null)
@@ -137,58 +150,89 @@ async function setRPC(preset) {
         return
     }
 
-    const activity = {
-        name: preset.name,
-        type: preset.type || 0,
-        details: preset.details,
-        state: preset.state
-    }
+    try {
+        let largeImageExternal = null;
+        let smallImageExternal = null;
 
-    if (preset.timestamps) {
-        activity.timestamps = {}
-        if (preset.timestamps.start === "now") {
-            activity.timestamps.start = Date.now()
-        } else if (preset.timestamps.start) {
-            activity.timestamps.start = preset.timestamps.start
-        }
-
-        if (preset.timestamps.end) {
-            activity.timestamps.end = preset.timestamps.end
-        }
-    }
-
-    if (preset.assets) {
-        const hasValidAssets = (preset.assets.large_image && preset.assets.large_image.trim()) ||
-            (preset.assets.small_image && preset.assets.small_image.trim())
-
-        if (hasValidAssets) {
-            activity.assets = {}
-
-            if (preset.assets.large_image && preset.assets.large_image.trim()) {
-                activity.assets.large_image = preset.assets.large_image.trim()
-                if (preset.assets.large_text && preset.assets.large_text.trim()) {
-                    activity.assets.large_text = preset.assets.large_text.trim()
+        if (preset.assets) {
+            // fuck you discord, thanks
+            if (preset.assets.large_image && preset.assets.large_image.startsWith('http')) {
+                const largeExternalAssets = await Discord.RichPresence.getExternal(
+                    client,
+                    config.applicationId,
+                    preset.assets.large_image
+                );
+                if (largeExternalAssets && largeExternalAssets.length > 0) {
+                    largeImageExternal = largeExternalAssets[0].external_asset_path;
                 }
             }
 
-            if (preset.assets.small_image && preset.assets.small_image.trim()) {
-                activity.assets.small_image = preset.assets.small_image.trim()
-                if (preset.assets.small_text && preset.assets.small_text.trim()) {
-                    activity.assets.small_text = preset.assets.small_text.trim()
+            if (preset.assets.small_image && preset.assets.small_image.startsWith('http')) {
+                const smallExternalAssets = await Discord.RichPresence.getExternal(
+                    client,
+                    config.applicationId,
+                    preset.assets.small_image
+                );
+                if (smallExternalAssets && smallExternalAssets.length > 0) {
+                    smallImageExternal = smallExternalAssets[0].external_asset_path;
                 }
             }
         }
-    }
 
-    if (preset.buttons && preset.buttons.length > 0) {
-        activity.buttons = preset.buttons.map(button => button.label)
-        activity.metadata = {
-            button_urls: preset.buttons.map(button => button.url)
+        const rpc = new Discord.RichPresence(client)
+            .setApplicationId(config.applicationId)
+            .setName(preset.name)
+            .setType(preset.type || 0)
+
+        if (preset.details) rpc.setDetails(preset.details)
+        if (preset.state) rpc.setState(preset.state)
+
+        if (preset.timestamps) {
+            if (preset.timestamps.start === "now") {
+                rpc.setStartTimestamp(Date.now())
+            } else if (preset.timestamps.start) {
+                rpc.setStartTimestamp(preset.timestamps.start)
+            }
+
+            if (preset.timestamps.end) {
+                rpc.setEndTimestamp(preset.timestamps.end)
+            }
         }
-    }
 
-    await client.user.setActivity(activity)
-    activeRPC = preset
+        if (preset.assets) {
+            if (largeImageExternal) {
+                rpc.setAssetsLargeImage(largeImageExternal)
+            } else if (preset.assets.large_image) {
+                rpc.setAssetsLargeImage(preset.assets.large_image)
+            }
+
+            if (preset.assets.large_text) {
+                rpc.setAssetsLargeText(preset.assets.large_text)
+            }
+
+            if (smallImageExternal) {
+                rpc.setAssetsSmallImage(smallImageExternal)
+            } else if (preset.assets.small_image) {
+                rpc.setAssetsSmallImage(preset.assets.small_image)
+            }
+
+            if (preset.assets.small_text) {
+                rpc.setAssetsSmallText(preset.assets.small_text)
+            }
+        }
+
+        if (preset.buttons && preset.buttons.length > 0) {
+            preset.buttons.forEach(button => {
+                rpc.addButton(button.label, button.url)
+            })
+        }
+
+        await client.user.setActivity(rpc)
+        activeRPC = preset
+    } catch (error) {
+        console.log( error)
+        await client.user.setActivity(null)
+    }
 }
 
 // RPC Commands
@@ -200,8 +244,6 @@ createCommand('rpc', async (message) => {
         return
     }
 
-    const status = rpcEnabled ? 'enabled' : 'disabled'
-    const active = activeRPC ? `Active: ${activeRPC.name}` : 'nothing'
     const presetList = presets.map(p => p.name).join(', ')
 
     const rpcCommands = Array.from(commands.keys())
@@ -209,8 +251,8 @@ createCommand('rpc', async (message) => {
         .map(cmd => `${prefix}${cmd}`)
         .join(', ')
 
-    const msg = await message.channel.send(`RPC status: ${status}
-${active}
+    const msg = await message.channel.send(`RPC status: ${rpcEnabled ? 'enabled' : 'disabled'}
+${ activeRPC ? `active: ${activeRPC.name}` : 'nothing' }
 available presets: ${presetList}
 
 RPC commands: ${rpcCommands}`)
@@ -241,7 +283,7 @@ createCommand('rpcset', async (message, args) => {
         const msg = await message.channel.send(`rpc set to "${args[0]}"`)
         setTimeout(() => msg.delete().catch(() => {}), 2000)
     } catch (error) {
-        console.error(error)
+        console.log(error)
         const msg = await message.channel.send(`E${error.message}`)
         setTimeout(() => msg.delete().catch(() => {}), 3000)
     }
@@ -313,77 +355,79 @@ createCommand('rpcadd', async (message) => {
 })
 
 createCommand('rpcdelete', async (message, args) => {
-  if (!args[0]) {
-    const msg = await message.channel.send('usage: .rpcdelete <preset_name>')
-    setTimeout(() => msg.delete().catch(() => {}), 3000)
-    return
-  }
-
-  const name = args[0];
-  if (!loadPreset(name)) {
-    const msg = await message.channel.send(`preset "${name}" not found`)
-    setTimeout(() => msg.delete().catch(() => {}), 3000)
-    return
-  }
-
-  const confirm = async text => {
-    const msg = await message.channel.send(text)
-    try {
-      const collected = await message.channel.awaitMessages({
-        filter: m => m.author.id === message.author.id, max: 1, time: 10000
-      })
-      const reply = collected.first()
-      const result = reply.content.toLowerCase() === 'yes'
-      reply.delete().catch(() => {})
-      msg.delete().catch(() => {})
-      return result
-    } catch {
-      msg.delete().catch(() => {})
-      return false
+    if (!args[0]) {
+        const msg = await message.channel.send('usage: .rpcdelete <preset_name>')
+        setTimeout(() => msg.delete().catch(() => {}), 3000)
+        return
     }
-  }
-  
-  if (!(await confirm('you sure?')) || !(await confirm('positive?'))) {
-    message.channel.send('Deletion canceled').then(m => 
-      setTimeout(() => m.delete().catch(() => {}), 3000)
-    )
-    return
-  }
 
-  deletePreset(name)
-  if (activeRPC?.name.toLowerCase() === name.toLowerCase()) {
-    await setRPC(null)
-    activeRPC = null
-  }
-  
-  message.channel.send(`preset "${name}" has been deleted`).then(m => 
-    setTimeout(() => m.delete().catch(() => {}), 3000)
-  )
+    const name = args[0];
+    if (!loadPreset(name)) {
+        const msg = await message.channel.send(`preset "${name}" not found`)
+        setTimeout(() => msg.delete().catch(() => {}), 3000)
+        return
+    }
+
+    const confirm = async text => {
+        const msg = await message.channel.send(text)
+        try {
+            const collected = await message.channel.awaitMessages({
+                filter: m => m.author.id === message.author.id,
+                max: 1,
+                time: 10000
+            })
+            const reply = collected.first()
+            const result = reply.content.toLowerCase() === 'yes'
+            reply.delete().catch(() => {})
+            msg.delete().catch(() => {})
+            return result
+        } catch {
+            msg.delete().catch(() => {})
+            return false
+        }
+    }
+
+    if (!(await confirm('you sure?')) || !(await confirm('positive?'))) {
+        message.channel.send('Deletion canceled').then(m =>
+            setTimeout(() => m.delete().catch(() => {}), 3000)
+        )
+        return
+    }
+
+    deletePreset(name)
+    if (activeRPC?.name.toLowerCase() === name.toLowerCase()) {
+        await setRPC(null)
+        activeRPC = null
+    }
+
+    message.channel.send(`preset "${name}" has been deleted`).then(m =>
+        setTimeout(() => m.delete().catch(() => {}), 3000)
+    )
 })
 
 createCommand('rpcget', async (message, args) => {
-  if (!args[0]) {
-    const msg = await message.channel.send('usage: .rpcget <preset_name>')
-    setTimeout(() => msg.delete().catch(() => {}), 3000)
-    return
-  }
+    if (!args[0]) {
+        const msg = await message.channel.send('usage: .rpcget <preset_name>')
+        setTimeout(() => msg.delete().catch(() => {}), 3000)
+        return
+    }
 
-  const presetName = args[0]
-  const presetPath = path.join(RPC_DIR, `${presetName}.json`)
-  
-  if (!fs.existsSync(presetPath)) {
-    const msg = await message.channel.send(`preset "${presetName}" not found`)
-    setTimeout(() => msg.delete().catch(() => {}), 3000)
-    return
-  }
+    const presetName = args[0]
+    const presetPath = path.join(rpcDir, `${presetName}.json`)
 
-  await message.channel.send({
-    content: `"${presetName}" preset`,
-    files: [{
-      attachment: presetPath,
-      name: `${presetName}.json`
-    }]
-  })
+    if (!fs.existsSync(presetPath)) {
+        const msg = await message.channel.send(`preset "${presetName}" not found`)
+        setTimeout(() => msg.delete().catch(() => {}), 3000)
+        return
+    }
+
+    await message.channel.send({
+        content: `"${presetName}" preset`,
+        files: [{
+            attachment: presetPath,
+            name: `${presetName}.json`
+        }]
+    })
 })
 
 createCommand('help', async message => {
@@ -468,9 +512,9 @@ createCommand('purge', async (message, args) => {
     if (isNaN(amount) || amount < 1) return message.channel.send('invalid number')
     const targetArg = args[1]
     const target = targetArg ? (targetArg.startsWith('<@') ? targetArg.replace(/[<@!>]/g, '') : targetArg) : null
-    const canDeleteOthers = message.guild 
-        ? message.channel.permissionsFor(client.user)?.has('ManageMessages')
-        : false
+    const canDeleteOthers = message.guild ?
+        message.channel.permissionsFor(client.user)?.has('ManageMessages') :
+        false
     stopPurging = false
 
     let deleted = 0
@@ -525,47 +569,49 @@ createCommand('purge', async (message, args) => {
         }
 
         try {
-          await status.edit(`done deleted: ${deleted}, errors: ${failed}`)
+            await status.edit(`done deleted: ${deleted}, errors: ${failed}`)
         } catch {}
     } catch (error) {
-        console.error(error)
+        console.log(error)
         await status.edit(`error: ${error.message}`)
     }
 })
 
 // fuckass discord bro
 client.on("ready", () => {
-  const originalHandlePacket = client.ws.handlePacket.bind(client.ws);
+    const originalHandlePacket = client.ws.handlePacket.bind(client.ws);
 
-  client.ws.handlePacket = (packet, shard) => {
-    if (typeof packet === "object" && packet?.t === "SESSIONS_REPLACE") {
-      const sessions = packet.d || [];
-      const ownSessionId = client.sessionId;
-      const seen = new Set();
+    client.ws.handlePacket = (packet, shard) => {
+        if (typeof packet === "object" && packet?.t === "SESSIONS_REPLACE") {
+            const sessions = packet.d || [];
+            const ownSessionId = client.sessionId;
+            const seen = new Set();
 
-      client.currentSessions = sessions.filter(session => {
-        const sessionId = session.session_id;
-        const isNotOwn = sessionId !== ownSessionId;
-        const isNotCached = !sessionCache.sessionIds.includes(sessionId);
-        const isKnownClient = session.client_info?.client !== "unknown";
-        const isUnique = !seen.has(sessionId);
+            client.currentSessions = sessions.filter(session => {
+                const sessionId = session.session_id;
+                const isNotOwn = sessionId !== ownSessionId;
+                const isNotCached = !sessionCache.sessionIds.includes(sessionId);
+                const isKnownClient = session.client_info?.client !== "unknown";
+                const isUnique = !seen.has(sessionId);
 
-        if (isNotOwn && isNotCached && isKnownClient && isUnique) {
-          seen.add(sessionId);
-          return true;
+                if (isNotOwn && isNotCached && isKnownClient && isUnique) {
+                    seen.add(sessionId);
+                    return true;
+                }
+
+                return false;
+            });
+
+            //console.log(client.currentSessions)
         }
 
-        return false;
-      });
-    }
-
-    return originalHandlePacket(packet, shard);
-  };
+        return originalHandlePacket(packet, shard);
+    };
 });
 
 async function checkOfflineStatus() {
     if (!client.user) return
-    
+
     const hasActiveSessions = client.currentSessions && client.currentSessions.length > 0
     const shouldBeOffline = !hasActiveSessions
 
@@ -575,7 +621,7 @@ async function checkOfflineStatus() {
                 name: config.offline.customStatus || '',
                 type: 4
             }
-            
+
             await client.user.setPresence({
                 status: config.offline.status || 'dnd',
                 activities: [offlineActivity]
@@ -586,7 +632,7 @@ async function checkOfflineStatus() {
                 activities: []
             })
         }
-        
+
         isCurrentlyOffline = true
         activeRPC = null
     } else if (!shouldBeOffline && isCurrentlyOffline) {
@@ -596,13 +642,17 @@ async function checkOfflineStatus() {
                 await setRPC(preset)
             } else {
                 await client.user.setActivity(null)
-                await client.user.setPresence({ status: 'online' })
+                await client.user.setPresence({
+                    status: 'online'
+                })
             }
         } else {
             await client.user.setActivity(null)
-            await client.user.setPresence({ status: 'online' })
+            await client.user.setPresence({
+                status: 'online'
+            })
         }
-        
+
         isCurrentlyOffline = false
     }
 }
@@ -611,7 +661,7 @@ createCommand('offline', async (message, args) => {
     if (args.length < 1) {
         const mode = config.offline?.status || 'dnd'
         const status = config.offline?.customStatus || '[none]'
-        
+
         const msg = await message.channel.send(
             `enabled: ${config.offline?.enabled}\n` +
             `settings: ${mode} - "${status}"\n\n` +
@@ -621,7 +671,7 @@ createCommand('offline', async (message, args) => {
         setTimeout(() => msg.delete().catch(() => {}), 5000)
         return
     }
-    
+
     if (args.length < 2) {
         const msg = await message.channel.send('usage: .offline <mode> <status>\nmode: dnd, idle, online')
         setTimeout(() => msg.delete().catch(() => {}), 3000)
@@ -650,9 +700,13 @@ createCommand('offline', async (message, args) => {
 
 createCommand('offlinetoggle', async (message) => {
     if (!config.offline) {
-        config.offline = { enabled: false, status: 'dnd', customStatus: '' }
+        config.offline = {
+            enabled: false,
+            status: 'dnd',
+            customStatus: ''
+        }
     }
-    
+
     config.offline.enabled = !config.offline.enabled
     saveConfig()
 
@@ -663,11 +717,15 @@ createCommand('offlinetoggle', async (message) => {
                 await setRPC(preset)
             } else {
                 await client.user.setActivity(null)
-                await client.user.setPresence({ status: 'online' })
+                await client.user.setPresence({
+                    status: 'online'
+                })
             }
         } else {
             await client.user.setActivity(null)
-            await client.user.setPresence({ status: 'online' })
+            await client.user.setPresence({
+                status: 'online'
+            })
         }
         isCurrentlyOffline = false
     }
@@ -675,6 +733,46 @@ createCommand('offlinetoggle', async (message) => {
     const status = config.offline.enabled ? 'enabled' : 'disabled'
     const msg = await message.channel.send(`offline mode ${status}`)
     setTimeout(() => msg.delete().catch(() => {}), 2000)
+})
+
+// bad idea
+createCommand("eval", async (message, args) => {
+    let code = args.join(" ")
+    if (!code) {
+        const msg = await message.channel.send("usage: .eval <code>")
+        setTimeout(() => msg.delete().catch(() => {}), 3000)
+        return
+    }
+
+    const match = code.match(/```(?:js|javascript)?\n?([\s\S]*?)\n?```/)
+    if (match) {
+        code = match[1]
+    }
+
+    try {
+        code = decodeURIComponent(code)
+    } catch {}
+
+    code = `(async () => { ${code} })()`
+    console.log(code)
+
+    try {
+        let result = eval(code);
+
+        if (result instanceof Promise) {
+            result = await result;
+        }
+
+        let output = typeof result === 'string' ? result : util.inspect(result, {
+            depth: 2,
+            colors: false
+        });
+        const msg = await message.channel.send("```js\n" + output + "\n```");
+        setTimeout(() => msg.delete().catch(() => {}), 5000)
+    } catch (error) {
+        const msg = await message.channel.send("```js\n" + error.stack || error.toString() + "\n```");
+        setTimeout(() => msg.delete().catch(() => {}), 5000)
+    }
 })
 
 client.login(config.token)

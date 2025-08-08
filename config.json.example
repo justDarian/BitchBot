@@ -1,0 +1,12 @@
+{
+  "token": "your tokenhere",
+  "applicationId": "one of your random discord application ids",
+  "prefix": ".",
+  "rpcEnabled": true,
+  "currentRPC": "pia",
+  "offline": {
+    "enabled": true,
+    "status": "dnd",
+    "customStatus": "I am not online"
+  }
+}
