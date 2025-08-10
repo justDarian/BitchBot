@@ -230,7 +230,7 @@ async function setRPC(preset) {
         await client.user.setActivity(rpc)
         activeRPC = preset
     } catch (error) {
-        console.log( error)
+        console.log(error)
         await client.user.setActivity(null)
     }
 }
@@ -772,6 +772,42 @@ createCommand("eval", async (message, args) => {
     } catch (error) {
         const msg = await message.channel.send("```js\n" + error.stack || error.toString() + "\n```");
         setTimeout(() => msg.delete().catch(() => {}), 5000)
+    }
+})
+
+createCommand("restart", async (message) => {
+    // wait for msg to delete ngl brofry
+    await new Promise((resolve) => {
+        const checkInterval = setInterval(async () => {
+            try {
+                if (!await message.channel.messages.fetch(message.id)) {
+                    clearInterval(checkInterval);
+                    resolve();
+                }
+                // Message still exists, keep checking
+            } catch (err) {
+                clearInterval(checkInterval);
+                resolve();
+            }
+        }, 100)
+        
+        setTimeout(() => {
+            clearInterval(checkInterval);
+            resolve();
+        }, 2000);
+    });
+
+    if (process.env.pm_id !== undefined) {
+        process.exit();
+    } else {
+        process.on('exit', () => {
+            require('child_process').spawn(process.argv.shift(), process.argv, {
+                cwd: process.cwd(),
+                detached: true,
+                stdio: 'inherit',
+            });
+        });
+        process.exit();
     }
 })
 
